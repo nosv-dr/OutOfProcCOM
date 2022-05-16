@@ -11,18 +11,37 @@ namespace OutOfProcCOM
     [ComDefaultInterface(typeof(IServer))]
     public sealed class DllServer : IServer
     {
+        private readonly Lazy<Proxy> lazyProxy = new Lazy<Proxy>(GetProxy);
+
+        private static Proxy GetProxy()
+        {
+            AppDomain.CurrentDomain.AssemblyResolve += (object sender, ResolveEventArgs args) => Assembly.Load(args.Name);
+
+            var assembly = Assembly.GetExecutingAssembly();
+
+            var path = Path.GetDirectoryName(assembly.Location);
+
+            AppDomain proxyDomain = AppDomain.CreateDomain("proxyDomain_" + Guid.NewGuid().ToString("N"),
+                new System.Security.Policy.Evidence(AppDomain.CurrentDomain.Evidence),
+                new AppDomainSetup
+                {
+                    ApplicationBase = path,
+                    ConfigurationFile = Path.Combine(path, "DLLHost.exe.config"),
+                    LoaderOptimization = LoaderOptimization.MultiDomainHost,
+                    PrivateBinPath = path,
+                    PrivateBinPathProbe = path,
+                });
+
+            var proxy = proxyDomain.CreateInstanceAndUnwrap(typeof(Proxy).Assembly.FullName, typeof(Proxy).FullName);
+
+            return (Proxy)proxy;
+        }
+
         double IServer.ComputePi()
         {
             Trace.WriteLine($"Running {nameof(DllServer)}.{nameof(IServer.ComputePi)}");
-            double sum = 0.0;
-            int sign = 1;
-            for (int i = 0; i < 1024; ++i)
-            {
-                sum += sign / (2.0 * i + 1.0);
-                sign *= -1;
-            }
-
-            return 4.0 * sum;
+            
+            return lazyProxy.Value.ComputePi();
         }
 
 #if EMBEDDED_TYPE_LIBRARY
@@ -38,7 +57,7 @@ namespace OutOfProcCOM
                 return;
 
             // Register DLL surrogate and type library
-            COMRegistration.DllSurrogate.Register(Contract.Constants.ServerClassGuid, tlbPath);
+            COMRegistration.DllSurrogate.Register(Contract.Constants.ServerClassGuid, Contract.Constants.ServerAppName, tlbPath: tlbPath);
         }
 
         [ComUnregisterFunction]
